@@ -1,27 +1,28 @@
 #include <DHT.h>
-
 #define DHTPIN 27
 #define DHTTYPE DHT11
-
 DHT dht(DHTPIN, DHTTYPE);
-
 const int waterPin = 34;
+const int buzzerPin = 26;
+const int waterThreshold = 1000; // ajusta conforme o teu sensor/calibração
+
+const int buzzerChannel = 0; // canal LEDC (0-15)
 
 void setup() {
   Serial.begin(115200);
-  dht.begin();
+  ledcSetup(buzzerChannel, 1000, 8);     // canal, frequência inicial, resolução em bits
+  ledcAttachPin(buzzerPin, buzzerChannel); // associa o pino ao canal
 }
 
 void loop() {
-  float humidity = dht.readHumidity();
-  float temperature = dht.readTemperature();
-
   int water = analogRead(waterPin);
+  Serial.println(water);
 
-  if (isnan(humidity) || isnan(temperature)) {
-    Serial.println("Erro ao ler do DHT11!");
+  if (water > waterThreshold) {
+    ledcWriteTone(buzzerChannel, 1000); // buzzer apita a 1000 Hz
   } else {
-    Serial.printf("Temp: %.1f°C | Humidade: %.1f%% | Water: %d\n", temperature, humidity, water);
+    ledcWriteTone(buzzerChannel, 0); // desliga o tom
   }
 
+  delay(300);
 }
