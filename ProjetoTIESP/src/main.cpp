@@ -5,6 +5,9 @@
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
+
+
+
 const int waterPin = 34;
 const int buzzerPin = 26;
 const int waterThreshold = 1000;
