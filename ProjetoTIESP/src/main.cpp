@@ -2,6 +2,7 @@
 #include <LiquidCrystal.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <time.h>
 
 //-----------------------------------------Sensor de Temperatura/Humidade-------------------------------------------------
 #define DHTPIN 27
@@ -20,23 +21,29 @@ const int pinoContraste = 15;
 LiquidCrystal lcd(22, 23, 5, 18, 19, 21); // (rs, enable, d4, d5, d6, d7)
 
 //----------------------------------------Servidor--------------------------------------------------------------------------
-const char* HOST = "iot.dei.estg.ipleiria.pt";
-const String BASE_PATH = "/ti/ti032/api/api.php";
+// Nota: "Trabalho TI Final" tem espaços -> codificados como %20 no URL
+const char *HOST = "iot.dei.estg.ipleiria.pt";
+const String BASE_PATH = "/ti/ti032/Trabalho%20TI%20Final/api/api.php";
 
 //-----------------------------------------WIFI-------------------------------------------------------------------------
-const char* SSID = "labs";
-const char* PASS_WIFI = "1nv3nt@r2023_IPLEIRIA";
+const char *SSID = "labs";
+const char *PASS_WIFI = "1nv3nt@r2023_IPLEIRIA";
 
 //-----------------------------------------Protótipos das funções--------------------------------------------------------
 String getFromAPI(String nome);
 void post2API(String enviaNome, float enviaValor, String enviaHora);
-String getValorFicheiro();
+void post2API(String enviaNome, int enviaValor, String enviaHora);
 
 //-----------------------------------------Variável de controlo do último estado de acesso mostrado no LCD-----------------
 String ultimoAcessoMostrado = "";
 
+//-----------------------------------------Variáveis para controlar envio de dados via POST------------------------------------
+unsigned long lastPostTime = 0;
+const unsigned long postInterval = 10000; // Enviar dados a cada 10 segundos (em milisegundos)
+
 //----------------------------------------------Setup----------------------------------------------------------------------
-void setup() {
+void setup()
+{
   Serial.begin(115200);
 
   // Configuração do Buzzer
@@ -48,7 +55,7 @@ void setup() {
 
   // Configuração do Contraste e Inicialização do LCD
   pinMode(pinoContraste, OUTPUT);
-  analogWrite(pinoContraste, 10); // Se o ecrã ficar apagado/escuro, ajusta este valor (0-255)
+  analogWrite(pinoContraste, 3); // Se o ecrã ficar apagado/escuro, ajusta este valor (0-255)
   lcd.begin(16, 2);
 
   // Mensagem de boas-vindas
@@ -64,7 +71,8 @@ void setup() {
   lcd.print("Ligando WiFi...");
 
   WiFi.begin(SSID, PASS_WIFI);
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED)
+  {
     Serial.print(".");
     delay(250);
   }
@@ -74,11 +82,25 @@ void setup() {
   lcd.setCursor(0, 0);
   lcd.print("WiFi Ligado!");
   delay(1000);
+  
+  // Sincronizar hora via NTP
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  Serial.println("Sincronizando hora via NTP...");
+  time_t now = time(nullptr);
+  int attempts = 0;
+  while (now < 24 * 3600 && attempts < 20) {
+    delay(500);
+    now = time(nullptr);
+    attempts++;
+  }
+  Serial.println("Hora sincronizada!");
+  
   lcd.clear();
 }
 
 //-------------------------------------------------------loop---------------------------------------------------------------
-void loop() {
+void loop()
+{
   int water = analogRead(waterPin);
   int sound = analogRead(soundPin);
   float humidity = dht.readHumidity();
@@ -96,124 +118,178 @@ void loop() {
   Serial.print(humidity);
   Serial.println(" %");
 
-  // --- Ler estado do acesso RFID vindo do Raspberry, via ficheiro valor.txt ---
-  String acesso = getValorFicheiro(); // espera "1" (aceite) ou "0" (rejeitado)
+  // --- Ler estado do acesso RFID vindo do Raspberry, via API (nome=rfid) ---
+  String acesso = getFromAPI("rfid"); // espera "1" (aceite), "0" (rejeitado), "esperando"
+
+  // --- ENVIAR VALORES DOS SENSORES VIA POST ---
+  unsigned long currentTime = millis();
+  if (currentTime - lastPostTime >= postInterval) {
+    lastPostTime = currentTime;
+    
+    // Obter hora/data real
+    time_t now = time(nullptr);
+    struct tm* timeinfo = localtime(&now);
+    char buffer[25];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
+    String hora = String(buffer);
+    
+    // Enviar cada sensor se os valores forem válidos
+    if (!isnan(temperature)) {
+      post2API("temperatura", temperature, hora);
+    }
+    if (!isnan(humidity)) {
+      post2API("humidade", humidity, hora);
+    }
+    post2API("agua", water, hora);
+    post2API("som", sound, hora);
+    
+    Serial.println(">>> Dados dos sensores enviados via POST - " + hora);
+  }
 
   Serial.print("Estado RFID: ");
-  if (acesso == "0") {
+  if (acesso == "0")
+  {
     Serial.println("REJEITADO");
-  } else if (acesso == "1") {
+  }
+  else if (acesso == "1")
+  {
     Serial.println("ACEITE");
-  } else {
+  }
+  else if (acesso == "esperando")
+  {
+    Serial.println("A AGUARDAR CARTAO");
+  }
+  else
+  {
     Serial.println("(sem estado / " + acesso + ")");
   }
 
   // --- LÓGICA DE ALARMES E DISPLAY LCD ---
-  if (water > waterThreshold) {
-    // Alerta de Inundação no LCD
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("!!! ALERTA !!!");
-    lcd.setCursor(0, 1);
-    lcd.print("AGUA! W: ");
-    lcd.print(water);
+  if (water > waterThreshold)
+{
+  // Alerta de Inundação no LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("!!! ALERTA !!!");
+  lcd.setCursor(0, 1);
+  lcd.print("AGUA! W: ");
+  lcd.print(water);
 
-    // Tons do Buzzer
-    ledcWriteTone(buzzerChannel, 1000);
-    delay(500);
-    ledcWriteTone(buzzerChannel, 1200);
-    delay(300);
-    ledcWriteTone(buzzerChannel, 0);
-    delay(500);
+  // Tons do Buzzer
+  ledcWriteTone(buzzerChannel, 1000);
+  delay(500);
+  ledcWriteTone(buzzerChannel, 1200);
+  delay(300);
+  ledcWriteTone(buzzerChannel, 0);
+  delay(500);
 
-    ultimoAcessoMostrado = ""; // reset, para o próximo acesso voltar a mostrar no LCD
+  ultimoAcessoMostrado = ""; // reset, para o próximo acesso voltar a mostrar no LCD
+}
+else if (sound > soundThreshold)
+{
+  // Alerta de Ruído no LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("!!! ALERTA !!!");
+  lcd.setCursor(0, 1);
+  lcd.print("SOM! S: ");
+  lcd.print(sound);
 
-  } else if (sound > soundThreshold) {
-    // Alerta de Ruído no LCD
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("!!! ALERTA !!!");
-    lcd.setCursor(0, 1);
-    lcd.print("SOM! S: ");
-    lcd.print(sound);
+  // Tons do Buzzer
+  ledcWriteTone(buzzerChannel, 1500);
+  delay(500);
+  ledcWriteTone(buzzerChannel, 1300);
+  delay(300);
+  ledcWriteTone(buzzerChannel, 0);
+  delay(500);
 
-    // Tons do Buzzer
-    ledcWriteTone(buzzerChannel, 1500);
-    delay(500);
-    ledcWriteTone(buzzerChannel, 1300);
-    delay(300);
-    ledcWriteTone(buzzerChannel, 0);
-    delay(500);
+  ultimoAcessoMostrado = "";
+}
+else if (acesso == "0" && ultimoAcessoMostrado != "0")
+{
+  // RFID rejeitado -> LCD + som de erro
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("ACESSO NEGADO");
+  lcd.setCursor(0, 1);
+  lcd.print(":(");
 
-    ultimoAcessoMostrado = "";
+  ledcWriteTone(buzzerChannel, 400);
+  delay(300);
+  ledcWriteTone(buzzerChannel, 0);
+  delay(200);
 
-  } else if (acesso == "0" && ultimoAcessoMostrado != "0") {
-    // RFID rejeitado -> LCD + som de erro
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("ACESSO NEGADO");
-    lcd.setCursor(0, 1);
-    lcd.print(":(");
+  ultimoAcessoMostrado = "0";
+  delay(1500); // tempo para a mensagem ficar visível
+}
+else if (acesso == "1" && ultimoAcessoMostrado != "1")
+{
+  // RFID aceite -> LCD + som de sucesso
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("ACESSO PERMITIDO");
+  lcd.setCursor(0, 1);
+  lcd.print(":)");
 
-    ledcWriteTone(buzzerChannel, 400);
-    delay(300);
-    ledcWriteTone(buzzerChannel, 0);
-    delay(200);
+  ledcWriteTone(buzzerChannel, 1800);
+  delay(200);
+  ledcWriteTone(buzzerChannel, 0);
 
-    ultimoAcessoMostrado = "0";
-    delay(1500); // tempo para a mensagem ficar visível
+  ultimoAcessoMostrado = "1";
+  delay(1500); // tempo para a mensagem ficar visível
+}
+else if (acesso == "esperando" && ultimoAcessoMostrado != "esperando")
+{
+  // RFID à espera de cartão -> LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("A AGUARDAR");
+  lcd.setCursor(0, 1);
+  lcd.print("CARTAO RFID...");
 
-  } else if (acesso == "1" && ultimoAcessoMostrado != "1") {
-    // RFID aceite -> LCD + som de sucesso
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("ACESSO PERMITIDO");
-    lcd.setCursor(0, 1);
-    lcd.print(":)");
+  ultimoAcessoMostrado = "esperando";
+  delay(800);
+}
+else
+{
+  // Se tudo estiver normal, desliga o buzzer
+  ledcWriteTone(buzzerChannel, 0);
 
-    ledcWriteTone(buzzerChannel, 1800);
-    delay(200);
-    ledcWriteTone(buzzerChannel, 0);
+  // Mostra os dados dos sensores no LCD
+  // Linha 1: Temperatura e Humidade
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(isnan(temperature) ? 0 : temperature, 1); // Garante que não crasha se o DHT falhar
+  lcd.print("C H:");
+  lcd.print(isnan(humidity) ? 0 : humidity, 1);
+  lcd.print("% ");
 
-    ultimoAcessoMostrado = "1";
-    delay(1500); // tempo para a mensagem ficar visível
+  // Linha 2: Nível de Água e Som
+  lcd.setCursor(0, 1);
+  lcd.print("W:");
+  lcd.print(water);
+  lcd.print("  S:");
+  lcd.print(sound);
+  lcd.print("    "); // Espaços extra para "limpar" resíduos de números maiores anteriores
 
-  } else {
-    // Se tudo estiver normal, desliga o buzzer
-    ledcWriteTone(buzzerChannel, 0);
-
-    // Mostra os dados dos sensores no LCD
-    // Linha 1: Temperatura e Humidade
-    lcd.setCursor(0, 0);
-    lcd.print("T:");
-    lcd.print(isnan(temperature) ? 0 : temperature, 1); // Garante que não crasha se o DHT falhar
-    lcd.print("C H:");
-    lcd.print(isnan(humidity) ? 0 : humidity, 1);
-    lcd.print("% ");
-
-    // Linha 2: Nível de Água e Som
-    lcd.setCursor(0, 1);
-    lcd.print("W:");
-    lcd.print(water);
-    lcd.print("  S:");
-    lcd.print(sound);
-    lcd.print("    "); // Espaços extra para "limpar" resíduos de números maiores anteriores
-
-    delay(500);
+  delay(500);
   }
 }
 
 //---------------------------------------------------FUNÇÕES----------------------------------------------------------
 
-String getFromAPI(String nome) {
+String getFromAPI(String nome)
+{
   HTTPClient http;
+  WiFiClient client;
   String url = "http://" + String(HOST) + BASE_PATH + "?nome=" + nome;
 
-  http.begin(url);
+  http.begin(client, url);
   int httpCode = http.GET();
   String response = "";
 
-  if (httpCode > 0) {
+  if (httpCode > 0)
+  {
     response = http.getString();
     response.trim();
   }
@@ -222,11 +298,14 @@ String getFromAPI(String nome) {
   return response;
 }
 
-void post2API(String enviaNome, float enviaValor, String enviaHora) {
+void post2API(String enviaNome, float enviaValor, String enviaHora)
+{
   HTTPClient http;
+  WiFiClient client;
+  
   String url = "http://" + String(HOST) + BASE_PATH;
 
-  http.begin(url);
+  http.begin(client, url);
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
   String body = "nome=" + enviaNome + "&valor=" + String(enviaValor) + "&hora=" + enviaHora;
@@ -236,19 +315,18 @@ void post2API(String enviaNome, float enviaValor, String enviaHora) {
   http.end();
 }
 
-String getValorFicheiro() {
+void post2API(String enviaNome, int enviaValor, String enviaHora)
+{
   HTTPClient http;
-  String url = "http://" + String(HOST) + "/ti/ti032/api/files/rfid/valor.txt";
+  WiFiClient client;
+  String url = "http://" + String(HOST) + BASE_PATH;
 
-  http.begin(url);
-  int httpCode = http.GET();
-  String response = "";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
-  if (httpCode > 0) {
-    response = http.getString();
-    response.trim();
-  }
+  String body = "nome=" + enviaNome + "&valor=" + String(enviaValor) + "&hora=" + enviaHora;
+  http.POST(body);
+  http.getString();
 
   http.end();
-  return response;
 }
