@@ -26,7 +26,7 @@ const char *HOST = "iot.dei.estg.ipleiria.pt";
 const String BASE_PATH = "/ti/ti032/Trabalho%20TI%20Final/api/api.php";
 
 //-----------------------------------------WIFI-------------------------------------------------------------------------
-const char *SSID = "labs";
+const char *SSID = "labs-LCA";
 const char *PASS_WIFI = "1nv3nt@r2023_IPLEIRIA";
 
 //-----------------------------------------Protótipos das funções--------------------------------------------------------
